@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "math.h"
+#include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,48 +50,40 @@ TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim5;
 
 /* USER CODE BEGIN PV */
-// --- MPU6050 ---
 #define MPU6050_ADDR 0xD0
 int16_t Accel_Y_RAW, Accel_Z_RAW;
 int16_t Gyro_X_RAW;
 float Ax, Gx;
 float Angle_Balance = 0;
 
-// --- PID GÓC (OUTER LOOP) ---
-// Nhiệm vụ: Biến độ nghiêng thành Tốc độ mong muốn
-float Kp_Ang = 45, Ki_Ang =  0, Kd_Ang = 25;
-float Setpoint_Ang = -1.8; // Góc cân bằng cơ học
+float Kp_Ang = 10, Ki_Ang =  0.1, Kd_Ang = 0.34;
+float Setpoint_Ang = 2;
 float Error_Ang = 0, Last_Error_Ang = 0, Integral_Ang = 0;
 float Target_Speed = 0;
 
-// --- PID TỐC ĐỘ (INNER LOOP) ---
-// Nhiệm vụ: Biến sai số tốc độ thành PWM
-float Kp_Spd = 1.2, Ki_Spd = 12, Kd_Spd = 0; // Thường chỉ cần PI
-float Current_Speed = 0; // Tốc độ thực đo từ Encoder
+float Kp_Spd = 0.93, Ki_Spd = 0.36, Kd_Spd = 0;
+float Current_Speed = 0;
 float Error_Spd = 0, Integral_Spd = 0, Last_Error_Spd = 0;
-float PWM_Out = 0; // ĐẦU RA CUỐI CÙNG
+float PWM_Out = 0;
 
-// --- ENCODER ---
-int32_t Encoder_Count = 0; // Tổng xung đọc được
+float count1 = 0;
+float count2 = 0;
 char buffer[64];
-// MOTOR 1
 #define M1_IN1_PORT GPIOC
 #define M1_IN1_PIN  GPIO_PIN_0
 #define M1_IN2_PORT GPIOC
 #define M1_IN2_PIN  GPIO_PIN_4
-#define M1_TIMER_PWM &htim2         // Timer điều khiển PWM
-#define M1_TIMER_CHANNEL TIM_CHANNEL_1 // Kênh PWM
-
-// MOTOR 2
+#define M1_TIMER_PWM &htim2
+#define M1_TIMER_CHANNEL TIM_CHANNEL_1
 #define M2_IN3_PORT GPIOC
 #define M2_IN3_PIN  GPIO_PIN_2
 #define M2_IN4_PORT GPIOC
 #define M2_IN4_PIN  GPIO_PIN_3
-#define M2_TIMER_PWM &htim2         // Cùng timer, kênh khác
-#define M2_TIMER_CHANNEL TIM_CHANNEL_2 // Kênh PWM
+#define M2_TIMER_PWM &htim2
+#define M2_TIMER_CHANNEL TIM_CHANNEL_2
 
-// Giá trị ARR (Counter Period) của TIM2 đã đặt trong CubeMX
 #define PWM_MAX_VALUE 999
+volatile uint8_t flag_run_pid = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -107,191 +100,97 @@ static void MX_TIM5_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-// Tham chiếu đến các biến được định nghĩa trong usbd_cdc_if.c
 extern uint8_t g_usb_rx_buffer[64];
 extern volatile uint8_t g_usb_rx_flag;
-
-// Hàm gửi dữ liệu về máy tính (cho phản hồi)
 void USB_SendString(char* str)
 {
     CDC_Transmit_FS((uint8_t*)str, strlen(str));
 }
-
-//* @brief Điều khiển một motor.
-//* @param motor_num: 1 hoặc 2
-//* @param direction: 'F' (Tiến), 'R' (Lùi), 'S' (Dừng)
-//* @param percentage: Tốc độ (0-100)
-//*/
-// Khởi tạo MPU6050 (Đánh thức chip)
 void MPU6050_Init(void) {
     uint8_t check = 0;
     uint8_t data;
-
-    // Đọc thanh ghi WHO_AM_I (0x75)
-    // Nếu giao tiếp tốt, nó phải trả về 0x68
     HAL_StatusTypeDef ret = HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR, 0x75, 1, &check, 1, 1000);
 
     if (ret != HAL_OK) {
         USB_SendString("Error: I2C Connect Failed! Check wires.\r\n");
     }
     else if (check == 0x68) {
-        // 1. Đánh thức chip (Thanh ghi PWR_MGMT_1)
         data = 0;
         HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, 0x6B, 1, &data, 1, 1000);
-
-        // 2. Cấu hình Gyro Scale +/- 250 độ/s (Thanh ghi GYRO_CONFIG)
-        // Để phù hợp với công thức chia 131.0 của bạn
         data = 0x00;
         HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, 0x1B, 1, &data, 1, 1000);
 
         USB_SendString("MPU6050 Init: OK (Found 0x68)\r\n");
     } else {
-        // Nếu đọc được nhưng ID không phải 0x68
         char msg[64];
         sprintf(msg, "Error: Wrong ID! Read: 0x%02X (Expected 0x68)\r\n", check);
         USB_SendString(msg);
     }
 }
 
-// Đọc dữ liệu cảm biến
 void Read_Sensor(void) {
     uint8_t Rec_Data[14];
-
-    // Đọc Accel Y (0x3D)
     HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR, 0x3B, 1, Rec_Data, 14, 1000);
-
-    // Accel Y (0x3D, 0x3E)
     Accel_Y_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data[3]);
-    // Accel Z (0x3F, 0x40)
     Accel_Z_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data[5]);
-    // Gyro X (0x43, 0x44)
     Gyro_X_RAW = (int16_t)(Rec_Data[8] << 8 | Rec_Data[9]);
-    // 57.296 = 180/PI
     Ax = atan2(Accel_Y_RAW, Accel_Z_RAW) * 57.296;
     Gx = Gyro_X_RAW / 131.0;
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-  if (htim->Instance == TIM5) {
-	  float dt = 0.005;
-	        // GIAI ĐOẠN 1: ĐỌC CẢM BIẾN & TÍNH GÓC (Theo tài liệu)
-	        Read_Sensor(); // Đọc Ax, Gx (Hàm này bạn đã có ở code trước)
-	        // Bộ lọc bù (Complementary Filter): Tin Gyro 98%, Accel 2%
-	        Angle_Balance = 0.98 * ((float)Angle_Balance + (float)Gx * dt) + 0.02 * (float)Ax;
-	        // GIAI ĐOẠN 2: VÒNG PID NGOÀI (ANGLE LOOP)
-	        Error_Ang = Angle_Balance - Setpoint_Ang;
-	        Integral_Ang += Error_Ang * dt;
-	        // Kẹp tích phân (Anti-windup)
-	        if (Integral_Ang > 200) Integral_Ang = 200;
-	        if (Integral_Ang < -200) Integral_Ang = -200;
-	        float Derivative_Ang = (Error_Ang - Last_Error_Ang) / dt;
-	        Last_Error_Ang = Error_Ang;
-	        // Công thức PID: Out = P + I + D
-	        Target_Speed = (Kp_Ang * Error_Ang) + (Ki_Ang * Integral_Ang) + (Kd_Ang * Derivative_Ang);
-	        // GIAI ĐOẠN 3: VÒNG PID TRONG (SPEED LOOP)
-	        // 3.1. Đọc tốc độ thực từ Encoder (Pulse / 5ms)
-	        // Đọc timer encoder, ép kiểu int16_t để xử lý số âm khi tràn
-	        int16_t count1 = (int16_t)__HAL_TIM_GET_COUNTER(&htim3);
-	        int16_t count2 = (int16_t)__HAL_TIM_GET_COUNTER(&htim4);
-	        // Reset counter để đo cho chu kỳ tiếp theo
-	        __HAL_TIM_SET_COUNTER(&htim3, 0);
-	        __HAL_TIM_SET_COUNTER(&htim4, 0);
-	        // Tốc độ trung bình 2 bánh
-	        Current_Speed = (float)(count1 + count2) / 2.0;
-	        // 3.2. Tính toán PID Tốc độ
-	        Error_Spd = Target_Speed - Current_Speed;
-	        Integral_Spd += Error_Spd * dt;
-	        // Kẹp tích phân tốc độ (Quan trọng cho PWM)
-	        if (Integral_Spd > 1000) Integral_Spd = 1000;
-	        if (Integral_Spd < -1000) Integral_Spd = -1000;
-	        // Vòng tốc độ thường chỉ cần PI (D ít dùng vì nhiễu)
-	        PWM_Out = (Kp_Spd * Error_Spd) + (Ki_Spd * Integral_Spd);
-	        // GIAI ĐOẠN 4: XỬ LÝ PHẦN CỨNG (HARDWARE MAPPING)
-	        // 4.1. An toàn: Ngắt nếu góc quá lớn (xe ngã)
-	        if (Angle_Balance > 70 || Angle_Balance < -70) {
-	            PWM_Out = 0;
-	            Integral_Ang = 0; // Reset tích phân để tránh vọt lố khi dựng lại
-	            Integral_Spd = 0;
-	      }
-	        // 4.2. Xuất ra động cơ
-	        int final_pwm = 0;
-	        char dir = 'S';
-	        if (PWM_Out > 0) {
-	            dir = 'F'; // Tiến
-	            final_pwm = (int)(PWM_Out);
-	        } else if (PWM_Out < 0) {
-	            dir = 'R'; // Lùi
-	            final_pwm = (int)(-PWM_Out);
-	        }
-	        // Giới hạn Max PWM (0-100 hoặc 0-1000 tùy Timer của bạn)
-	        // Ở code trước max PWM của bạn là 100 (percentage)
-	        if (final_pwm > 100) final_pwm = 100;
-
-	        // Vùng chết (Deadzone compensation)
-	        if (final_pwm > 0 && final_pwm < 20) final_pwm = 20;
-
-	        Control_Motor(1, dir, final_pwm);
-	        Control_Motor(2, dir, final_pwm);
-	    }
+	if (htim->Instance == TIM5) {
+	      flag_run_pid = 1;
+	  }
 }
 
 void Control_Motor(int motor_num, char direction, int percentage)
 {
-  // 1. Chuyển đổi % tốc độ (0-100) sang giá trị PWM (0-999)
   if (percentage < 0)   percentage = 0;
   if (percentage > 100) percentage = 100;
 
-  // Nếu dừng, tốc độ luôn là 0
   if (direction == 'S') {
-      percentage = 0;
+	  percentage = 0;
   }
-
   uint32_t pwm_value = (uint32_t)(percentage * PWM_MAX_VALUE / 100.0);
-
-  // 2. Điều khiển Motor 1
   if (motor_num == 1)
   {
-      // Đặt chiều quay
-      if (direction == 'F') // Quay tiến
+      if (direction == 'F')
       {
           HAL_GPIO_WritePin(M1_IN1_PORT, M1_IN1_PIN, GPIO_PIN_SET);
           HAL_GPIO_WritePin(M1_IN2_PORT, M1_IN2_PIN, GPIO_PIN_RESET);
       }
-      else if (direction == 'R') // Quay lùi
+      else if (direction == 'R')
       {
           HAL_GPIO_WritePin(M1_IN1_PORT, M1_IN1_PIN, GPIO_PIN_RESET);
           HAL_GPIO_WritePin(M1_IN2_PORT, M1_IN2_PIN, GPIO_PIN_SET);
       }
-      else // 'S' (Stop) - Phanh hãm (Brake)
+      else
       {
           HAL_GPIO_WritePin(M1_IN1_PORT, M1_IN1_PIN, GPIO_PIN_RESET);
           HAL_GPIO_WritePin(M1_IN2_PORT, M1_IN2_PIN, GPIO_PIN_RESET);
       }
 
-      // Đặt tốc độ PWM
       __HAL_TIM_SET_COMPARE(M1_TIMER_PWM, M1_TIMER_CHANNEL, pwm_value);
   }
-  // 3. Điều khiển Motor 2
   else if (motor_num == 2)
   {
       // Đặt chiều quay
-      if (direction == 'F') // Quay tiến
+      if (direction == 'F')
       {
           HAL_GPIO_WritePin(M2_IN3_PORT, M2_IN3_PIN, GPIO_PIN_SET);
           HAL_GPIO_WritePin(M2_IN4_PORT, M2_IN4_PIN, GPIO_PIN_RESET);
       }
-      else if (direction == 'R') // Quay lùi
+      else if (direction == 'R')
       {
           HAL_GPIO_WritePin(M2_IN3_PORT, M2_IN3_PIN, GPIO_PIN_RESET);
           HAL_GPIO_WritePin(M2_IN4_PORT, M2_IN4_PIN, GPIO_PIN_SET);
       }
-      else // 'S' (Stop) - Phanh hãm (Brake)
+      else
       {
           HAL_GPIO_WritePin(M2_IN3_PORT, M2_IN3_PIN, GPIO_PIN_RESET);
           HAL_GPIO_WritePin(M2_IN4_PORT, M2_IN4_PIN, GPIO_PIN_RESET);
       }
-
-      // Đặt tốc độ PWM
       __HAL_TIM_SET_COMPARE(M2_TIMER_PWM, M2_TIMER_CHANNEL, pwm_value);
   }
 }
@@ -333,25 +232,14 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM5_Init();
   /* USER CODE BEGIN 2 */
-  // === KHỞI ĐỘNG PWM CHO L298N ===
-   // Khởi động PWM cho Motor 1 (TIM2, Channel 1)
    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-   // Khởi động PWM cho Motor 2 (TIM2, Channel 2)
    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-
-   // Đặt tốc độ ban đầu bằng 0
    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
-
-   // === KHỞI ĐỘNG ENCODER (Để sẵn sàng) ===
-   // Khởi động Encoder Motor 1 (TIM3)
    HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
-   // Khởi động Encoder Motor 2 (TIM4)
    HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
    MPU6050_Init();
       HAL_Delay(50);
-   // Gửi lời chào khi kết nối
-   USB_SendString("Motor Controller Ready. Send commands.\r\n");
    HAL_TIM_Base_Start_IT(&htim5);
   /* USER CODE END 2 */
 
@@ -359,6 +247,54 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  if (flag_run_pid == 1) {
+	  flag_run_pid = 0;
+	  float dt = 0.005;
+	  	        Read_Sensor();
+	  	        Angle_Balance = 0.98 * ((float)Angle_Balance + (float)Gx * dt) + 0.02 * (float)Ax;
+	  	        Error_Ang = Angle_Balance - Setpoint_Ang;
+	  	        Integral_Ang += Error_Ang * dt;
+	  	        if (Integral_Ang > 100) Integral_Ang = 100;
+	  	        if (Integral_Ang < -100) Integral_Ang = -100;
+	  	        float Derivative_Ang = (Error_Ang - Last_Error_Ang) / dt;
+	  	        Last_Error_Ang = Error_Ang;
+	  	        Target_Speed = (Kp_Ang * Error_Ang) + (Ki_Ang * Integral_Ang) + (Kd_Ang * Derivative_Ang);
+	  		  if (Target_Speed > 100) Target_Speed = 100;
+	  		  if (Target_Speed < -100) Target_Speed = -100;
+	  	        count1 = (int16_t)__HAL_TIM_GET_COUNTER(&htim3);
+	  	        count2 = (int16_t)__HAL_TIM_GET_COUNTER(&htim4);
+	  	        __HAL_TIM_SET_COUNTER(&htim3, 0);
+	  	        __HAL_TIM_SET_COUNTER(&htim4, 0);
+	  	        Current_Speed = (float)(count1 + count2) / 2.0;
+	  	        Error_Spd = Target_Speed - Current_Speed;
+	  	        Integral_Spd += Error_Spd * dt;
+	  	        if (Integral_Spd > 200) Integral_Spd = 200;
+	  	        if (Integral_Spd < -200) Integral_Spd = -200;
+	  	        PWM_Out = (Kp_Spd * Error_Spd) + (Ki_Spd * Integral_Spd);
+	  	        if (Angle_Balance > 80 || Angle_Balance < -80) {
+	  	            PWM_Out = 0;
+	  	            Integral_Ang = 0;
+	  	            Integral_Spd = 0;
+	  	            Last_Error_Ang = 0;
+	  	            Last_Error_Spd = 0;
+	  	            Target_Speed = 0;
+	  	      }
+	  	        int final_pwm = 0;
+	  	        char dir = 'S';
+	  	        if (PWM_Out > 0) {
+	  	            dir = 'F';
+	  	            final_pwm = (int)(PWM_Out);
+	  	        } else if (PWM_Out < 0) {
+	  	            dir = 'R';
+	  	            final_pwm = (int)(-PWM_Out);
+	  	        }
+	  	      if (final_pwm > 100) final_pwm = 100;
+	  	      if (final_pwm < -100) final_pwm = -100;
+ 	  	        if (final_pwm > 0 && final_pwm < 20) final_pwm = 30;
+	  	        if (final_pwm < 0 && final_pwm > -20) final_pwm = -30;
+	  	        Control_Motor(1, dir, final_pwm);
+	  	        Control_Motor(2, dir, final_pwm);
+	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -367,18 +303,14 @@ int main(void)
 	          g_usb_rx_flag = 0;
 	          char type;
 	          float value;
-
-	          // Cú pháp: P 15.5 hoặc S -2.0
 	          if (sscanf((char*)g_usb_rx_buffer, "%c %f", &type, &value) == 2)
 	          {
 	        	  switch(type) {
-	        	  				  // Vòng GÓC (Angle Loop) - Dùng A, B, C
-	        	  				  case 'A': case 'a': Kp_Ang = value; break; // Thay cho Kp cũ
-	        	  				  case 'B': case 'b': Ki_Ang = value; break; // Thay cho Ki cũ
-	        	  				  case 'C': case 'c': Kd_Ang = value; break; // Thay cho Kd cũ
+	        	  				  case 'A': case 'a': Kp_Ang = value; break;
+	        	  				  case 'B': case 'b': Ki_Ang = value; break;
+	        	  				  case 'C': case 'c': Kd_Ang = value; break;
 	        	  				  case 'S': case 's': Setpoint_Ang = value; break;
-
-	        	  				  // Vòng TỐC ĐỘ (Speed Loop) - Dùng P, I, D
+ D
 	        	  				  case 'P': case 'p': Kp_Spd = value; break;
 	        	  				  case 'I': case 'i': Ki_Spd = value; break;
 	        	  				  case 'D': case 'd': Kd_Spd = value; break;
@@ -386,27 +318,19 @@ int main(void)
 	        	  			  char msg[64];
 	              sprintf(msg, "SET: %c = %.2f\r\n", type, value);
 	              USB_SendString(msg);
-
-	              // Reset thông số PID khi thay đổi để tránh giật
 	              Error_Ang = 0; Integral_Ang = 0; Last_Error_Ang = 0;
 	              Error_Spd = 0; Integral_Spd = 0; Last_Error_Spd = 0;
 	          }
 	      }
 
-	      // --- GỬI DATA DEBUG (10Hz) ---
 	      static uint32_t last_tick = 0;
 	      if (HAL_GetTick() - last_tick > 100)
 	      {
 	          last_tick = HAL_GetTick();
 	          char debug_msg[64];
-	          // In ra Góc nghiêng và PWM để vẽ đồ thị
-	          sprintf(debug_msg, "Ang:%.2f, Tgt:%.2f, PWM:%1f\r\n", Angle_Balance, Target_Speed, PWM_Out);
+	          sprintf(debug_msg, "Ang:%.2f, Speed:%.2f, PWM:%1f\r\n", Angle_Balance, Current_Speed, PWM_Out);
 	          USB_SendString(debug_msg);
 	      }
-//	  int len = sprintf(buffer, "Angle: %.2f\r\n",  Angle_Balance);
-//	  	      CDC_Transmit_FS((uint8_t*)buffer, len);
-//
-//	  	      HAL_Delay(10);
   }
 
   /* USER CODE END 3 */
