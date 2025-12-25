@@ -1,8 +1,8 @@
-# STM32_SelfBalancing_Robot
+# STM32_SelfBalancing_Car
 
-A two-wheeled self-balancing robot project implemented on the **STM32F407VET6** microcontroller, designed to maintain upright stability using PID control logic.
+A two-wheeled self-balancing car project implemented on the **STM32F407VET6** microcontroller, designed to maintain upright stability using PID control logic.
 
-The robot utilizes real-time data from an IMU sensor (MPU6050) to calculate tilt angles and adjusts the torque of the **GA25-370** motors accordingly via the **L298N** driver.
+The car utilizes real-time data from an IMU sensor (MPU6050) to calculate tilt angles and adjusts the torque of the **GA25-370** motors accordingly via the **L298N** driver.
 
 ---
 
@@ -33,7 +33,7 @@ Brian Vo @Ghuyv2412
 **hardware_design**: Schematics and PCB layout files.
 
 * **schematics**: Circuit diagrams for the STM32, L298N, and sensor interconnections.
-* **3d_model**: STL files for the robot chassis and motor brackets.
+* **3d_model**: STL files for the car chassis and motor brackets.
 
 **tuning_tools**: Scripts used to visualize data and tune PID parameters.
 
