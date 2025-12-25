@@ -24,7 +24,7 @@ Brian Vo @Ghuyv2412
 
 ### Folders
 
-**Stm32_firmware**: Contains the core C/C++ code developed in STM32CubeIDE / Keil uVision.
+**Stm32_firmware**: Contains the core C/C++ code developed in STM32CubeIDE.
 
 * **Pid_controller**: Implementation of the PID algorithm (Proportional-Integral-Derivative) for balance and speed control.
 * **Encoder_interface**: Modules for reading high-speed pulses from the GA25 motors to calculate velocity.
@@ -32,7 +32,7 @@ Brian Vo @Ghuyv2412
 
 **Hardware_design**: Schematics and PCB layout files.
 
-* **Schematics**: Circuit diagrams for the STM32, L298N, and sensor interconnections.
+* **Schematics**: Circuit diagrams for the STM32, L298N, and sensor MPU6050
 * **3d_model**: STL files for the car chassis and motor brackets.
 
 **Tuning_tools**: Scripts used to visualize data and tune PID parameters.
