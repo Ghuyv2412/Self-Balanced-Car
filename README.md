@@ -1,4 +1,4 @@
-# STM32_SelfBalancing_Car
+# STM32_Self_Balanced_Car
 
 A two-wheeled self-balancing car project implemented on the **STM32F407VET6** microcontroller, designed to maintain upright stability using PID control logic.
 
