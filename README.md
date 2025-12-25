@@ -24,7 +24,7 @@ Brian Vo @Ghuyv2412
 
 ### Folders
 
-**Stm32_firmware**: Contains the core C/C++ code developed in STM32CubeIDE.
+**Stm32_firmware**: Contains the core C code developed in STM32CubeIDE.
 
 * **Pid_controller**: Implementation of the PID algorithm (Proportional-Integral-Derivative) for balance and speed control.
 * **Encoder_interface**: Modules for reading high-speed pulses from the GA25 motors to calculate velocity.
