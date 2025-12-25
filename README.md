@@ -37,8 +37,6 @@ Brian Vo @Ghuyv2412
 
 **tuning_tools**: Scripts used to visualize data and tune PID parameters.
 
-* **serial_visualizer**: Python-based tool to graph the robot's tilt angle in real-time.
-
 ---
 
 ### Notes
