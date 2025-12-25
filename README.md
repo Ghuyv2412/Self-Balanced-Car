@@ -28,7 +28,7 @@ Brian Vo @Ghuyv2412
 
 * **Pid_controller**: Implementation of the PID algorithm (Proportional-Integral-Derivative) for balance and speed control.
 * **Encoder_interface**: Modules for reading high-speed pulses from the GA25 motors to calculate velocity.
-* **Imu_processing**: Filters (Complementary or Kalman) to process raw data from the MPU6050 for accurate angle estimation.
+* **Imu_processing**: Filters (Complementary) to process raw data from the MPU6050 for accurate angle estimation.
 
 **Hardware_design**: Schematics and PCB layout files.
 
