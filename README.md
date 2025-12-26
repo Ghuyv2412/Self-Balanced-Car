@@ -8,7 +8,7 @@ The car utilizes real-time data from an IMU sensor (MPU6050) to calculate tilt a
 
 ### Authors
 
-Ghuyv2412
+Gia Huy Vo @Ghuyv2412
 
 ---
 
